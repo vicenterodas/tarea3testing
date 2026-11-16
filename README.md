@@ -26,6 +26,7 @@ En cada carpeta hay un readme que detalla cómo levantar las aplicaciones.
 Desde `api/`, con Docker Desktop iniciado:
 
 ```sh
+node scripts/configurar-entorno.mjs
 docker compose up -d --build
 docker compose run --rm --no-deps --volume '.:/app' app pytest -q
 ```
@@ -38,7 +39,9 @@ Para ejecutar solamente los flujos de integración:
 docker compose run --rm --no-deps --volume '.:/app' app pytest -q tests/integration
 ```
 
-Los tests usan PostgreSQL de prueba (`db_test`, definido en `.env.test`). La
+El script prepara las variables locales a partir de plantillas sin claves; los
+archivos `.env` con valores locales no se publican. Los tests usan PostgreSQL de
+prueba (`db_test`, definido en `.env.test`). La
 fixture `reset_db` reinicia las tablas y carga `02_seed.sql` antes de cada caso.
 No ejecutar la suite de API al mismo tiempo que los E2E: la configuración base
 también conecta el servicio web al mismo `db_test`.

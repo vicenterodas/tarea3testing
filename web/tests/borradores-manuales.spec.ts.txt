@@ -1,0 +1,64 @@
+// BORRADORES GENERADOS CON AYUDA DE IA: no se ejecutan ni cuentan como manuales.
+// Reescribe los tres flujos en tests/manual.spec.ts con tus propias decisiones.
+// Después de reescribirlos, cambia @borrador por @manual y ejecútalos.
+import { test, expect } from './support/test-data';
+
+test('cancelar una nueva frase descarta los datos del formulario', { tag: '@borrador' }, async ({ page, testData }) => {
+  const text = `Frase cancelada ${testData.token}`;
+  await page.goto('/quotes');
+  await page.getByRole('button', { name: 'Nueva frase', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: 'Frase', exact: true }).fill(text);
+  await dialog.getByLabel('Fuente').fill('No debe guardarse');
+  await dialog.getByRole('button', { name: 'Cancelar', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByTestId('quotes-grid').getByText(text, { exact: true })).toHaveCount(0);
+
+  // Abrir de nuevo permite comprobar que tampoco quedaron datos en el diálogo.
+  await page.getByRole('button', { name: 'Nueva frase', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: 'Frase', exact: true })).toHaveValue('');
+  await expect(dialog.getByLabel('Fuente')).toHaveValue('');
+  await dialog.getByRole('button', { name: 'Cancelar', exact: true }).click();
+  const response = await testData.api.get('/quotes');
+  await expect(response).toBeOK();
+  expect((await response.json()).some((quote: { quote: string }) => quote.quote === text)).toBe(false);
+});
+
+test('buscar por texto sin distinguir mayúsculas y recuperar el listado', { tag: '@borrador' }, async ({ page, testData }) => {
+  const first = await testData.createQuote({ quote: `Aprender jugando ${testData.token}` });
+  const second = await testData.createQuote({ quote: `Otra idea diferente ${testData.token}` });
+  await page.goto('/quotes');
+  const grid = page.getByTestId('quotes-grid');
+  await expect(grid.getByText(first.quote, { exact: true })).toBeVisible();
+  await expect(grid.getByText(second.quote, { exact: true })).toBeVisible();
+  const search = page.getByPlaceholder('Buscar frases...');
+  await search.fill(`APRENDER JUGANDO ${testData.token}`);
+  await expect(grid.getByText(first.quote, { exact: true })).toBeVisible();
+  await expect(grid.getByText(second.quote, { exact: true })).toHaveCount(0);
+  await expect(grid.locator('[data-slot="card"]')).toHaveCount(1);
+
+  await search.fill(`sin-coincidencias-${testData.token}`);
+  await expect(grid.locator('[data-slot="card"]')).toHaveCount(0);
+  await search.clear();
+  await expect(grid.getByText(first.quote, { exact: true })).toBeVisible();
+  await expect(grid.getByText(second.quote, { exact: true })).toBeVisible();
+});
+
+test('abrir una frase del listado conserva todos sus datos al recargar', { tag: '@borrador' }, async ({ page, testData }) => {
+  const quote = await testData.createQuote({
+    quote: `Detalle completo ${testData.token}`,
+    source: `Fuente de detalle ${testData.token}`,
+    tags: ['science'],
+  });
+  await page.goto('/quotes');
+  await page.getByTestId('quotes-grid').getByText(quote.quote, { exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/quotes/${quote.id}$`));
+  await expect(page.getByRole('heading', { level: 1, name: quote.quote, exact: true })).toBeVisible();
+  await expect(page.getByTestId(quote.character.id)).toContainText(quote.character.name);
+  await expect(page.getByTestId(quote.character.id)).toContainText(quote.source);
+  await expect(page.getByText('science', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('heading', { level: 1, name: quote.quote, exact: true })).toBeVisible();
+  await expect(page.getByTestId(quote.character.id)).toContainText(quote.source);
+  await expect(page.getByText('science', { exact: true })).toBeVisible();
+});

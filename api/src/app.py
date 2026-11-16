@@ -1,0 +1,445 @@
+from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flasgger import Swagger, swag_from
+from src.scripts.quotes import *
+from src.scripts.tags import *
+from src.scripts.characters import *
+from flask_cors import CORS
+import os
+
+host = os.environ.get('DB_HOST')
+user = os.environ.get('DB_USER')
+passw = os.environ.get('DB_PASSWORD')
+port = os.environ.get('DB_PORT')
+name = os.environ.get('DB_NAME')
+
+app = Flask(__name__)
+Swagger(app)
+CORS(app)
+app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{user}:{passw}@{host}:{port}/{name}'
+
+db = SQLAlchemy(app)
+
+#-----Quotes Endpoints-----#
+
+# Get a daily quote
+@swag_from({
+    'tags': ['Quotes'],
+    'parameters': [],
+    'responses': {
+        200: {
+            'description': 'A daily quote',
+            'examples': {
+                'application/json': {
+                    "id": "4",
+                    "quote": "Do what you can, with what you have, where you are.",
+                    "character": {"id": "2", "name": "Theodore Roosevelt"},
+                    "source": "Theodore Roosevelt",
+                    "tags": [
+                        {"id": "2", "name": "inspiration"},
+                        {"id": "3", "name": "life"},
+                        {"id": "4", "name": "moustache"}
+                    ]
+                }
+            }
+        }
+    }
+})
+@app.route("/quotes/daily", methods=["GET"])
+def daily_quote():
+    quote = quote_daily(db)
+    return jsonify(quote)
+
+# Add a new quote
+@swag_from({
+    'tags': ['Quotes'],
+    'parameters': [
+        {
+            'name': 'body',
+            'in': 'body',
+            'required': True,
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'quote': {'type': 'string'},
+                    'character': {'type': 'string'},
+                    'source': {'type': 'string'},
+                    'tags': {
+                        'type': 'array',
+                        'items': {'type': 'string'}
+                    }
+                },
+                'required': ['quote', 'character', 'source']
+            }
+        }
+    ],
+    'responses': {
+        201: {
+            'description': 'Quote added successfully',
+            'examples': {
+                'application/json': {
+                    "id": "12",
+                    "quote": "Your new quote here.",
+                    "character": {"id": "1", "name": "Character Name"},
+                    "source": "Source Name",
+                    "tags": [{"id": "1", "name": "Tag 1"}, {"id": "2", "name": "Tag 2"}]
+                }
+            }
+        },
+        400: {
+            'description': 'Invalid quote data',
+            'examples': {
+                'application/json': {'error': 'Invalid quote data'}
+            }
+        },
+        409: {
+            'description': 'Quote already exists',
+            'examples': {
+                'application/json': {'error': 'Quote already exists'}
+            }
+        }
+    }
+})
+@app.route("/quotes/add", methods=["POST"])
+def add_quote():
+    new_quote = request.json
+    validation = quote_validate(new_quote)
+    if not validation['is_valid']:
+        return jsonify({"error": validation['error']}), 400
+    
+    if quote_exists(db, new_quote["quote"]):
+        return jsonify({"error": "La cita ya existe"}), 409
+
+    new_quote = quote_add(db, new_quote)
+
+    return jsonify(new_quote), 201
+
+# Delete a quote by ID
+@swag_from({
+    'tags': ['Quotes'],
+    'parameters': [
+        {
+            'name': 'quote_id',
+            'in': 'path',
+            'type': 'string',
+            'required': True,
+            'description': 'ID of the quote to delete'
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Quote deleted successfully',
+            'examples': {
+                'application/json': {'message': 'Quote deleted successfully'}
+            }
+        },
+        404: {
+            'description': 'Quote not found',
+            'examples': {
+                'application/json': {'error': 'Quote not found'}
+            }
+        }
+    }
+})
+@app.route("/quotes/delete/<quote_id>", methods=["DELETE"])
+def delete_quote(quote_id):
+    if not quote_id_exists(db, quote_id):
+        return jsonify({"error": "Cita no encontrada"}), 404
+    quote_delete(db, quote_id)
+    return jsonify({"message": "Cita eliminada con éxito"}), 200
+
+@swag_from({
+    'tags': ['Quotes'],
+    'parameters': [
+        {
+            'name': 'quote_id',
+            'in': 'path',
+            'type': 'string',
+            'required': True,
+            'description': 'ID of the quote to add tags to'
+        },
+        {
+            'name': 'tag',
+            'in': 'body',
+            'required': True,
+            'schema': {
+                'type': 'object',
+                'properties': {
+                    'tags': {
+                        'type': 'array',
+                        'items': {'type': 'string'}
+                    }
+                },
+                'required': ['tags']
+            }
+        }
+    ],
+    'responses': {
+        201: {
+            'description': 'Tags added to quote successfully',
+            'examples': {
+                'application/json': [
+                    {"id": "2", "name": "inspiration"},
+                    {"id": "3", "name": "life"}
+                ]
+            }
+        },
+        400: {
+            'description': 'No tag provided',
+            'examples': {
+                'application/json': {'error': 'No tag provided'}
+            }
+        },
+        404: {
+            'description': 'Quote not found',
+            'examples': {
+                'application/json': {'error': 'Quote not found'}
+            }
+        }
+    }
+})
+@app.route("/quotes/<quote_id>/tags", methods=["POST"])
+def add_tag_to_quote(quote_id):
+    if not quote_id_exists(db, quote_id):
+        return jsonify({"error": "Cita no encontrada"}), 404
+
+    tag_name = request.json.get("tags", [])
+    if not tag_name:
+        return jsonify({"error": "No se proporcionó ninguna etiqueta"}), 400
+    
+    if not isinstance(tag_name, list):
+        return jsonify({"error": "El formato de las etiquetas es inválido"}), 400
+    
+    for t in tag_name:
+        if not isinstance(t, str):
+            return jsonify({"error": "El formato de las etiquetas es inválido"}), 400
+    
+    tags = []
+
+    for tag in tag_name:
+        if not tag_name_exists(db, tag):
+            tag_id = tag_add(db, tag)
+        else:
+            tag_id = tag_id_get_by_name(db, tag)
+        quote_tag_add(db, quote_id, tag_id)
+        tags.append({'id': tag_id, 'name': tag})
+    return jsonify(tags), 201
+
+# Get quotes with optional filters
+@swag_from({
+    'tags': ['Quotes'],
+    'parameters': [
+        {
+            'name': 'character',
+            'in': 'query',
+            'type': 'string',
+            'required': False,
+            'description': 'Filter quotes by character name'
+        },
+        {
+            'name': 'tag',
+            'in': 'query',
+            'type': 'array',
+            'items': {'type': 'string'},
+            'required': False,
+            'description': 'Filter quotes by tag names'
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'List of quotes',
+            'examples': {
+                'application/json': [
+                    {
+                        "id": "4",
+                        "quote": "Do what you can, with what you have, where you are.",
+                        "character": "Theodore Roosevelt",
+                        "source": "Theodore Roosevelt",
+                        "tags": [
+                            {"id": "2", "name": "inspiration"},
+                            {"id": "3", "name": "life"},
+                            {"id": "5", "name": "no moustache"}
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+})
+@app.route("/quotes", methods=["GET"])
+def get_quotes():
+    character = request.args.get("character")
+    tags = request.args.getlist("tag")
+
+    filtered_quotes = quotes_get(db, character, tags)
+    return jsonify(filtered_quotes), 200
+
+@swag_from({
+    'tags': ['Quotes'],
+    'parameters': [
+        {
+            'name': 'quote_id',
+            'in': 'path',
+            'type': 'string',
+            'required': True,
+            'description': 'ID of the quote to retrieve'
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Quote details',
+            'examples': {
+                'application/json': {
+                    "id": "4",
+                    "quote": "Do what you can, with what you have, where you are.",
+                    "character": "Theodore Roosevelt",
+                    "source": "Theodore Roosevelt",
+                    "tags": [
+                        {"id": "2", "name": "inspiration"},
+                        {"id": "3", "name": "life"},
+                        {"id": "4", "name": "moustache"}
+                    ]
+                }
+            }
+        },
+        404: {
+            'description': 'Quote not found',
+            'examples': {
+                'application/json': {'error': 'Quote not found'}
+            }
+        }
+    }
+})
+@app.route("/quotes/<quote_id>", methods=["GET"])
+def get_quote(quote_id):
+    quote = quote_get_by_id(db, quote_id)
+    if quote is None:
+        return jsonify({"error": "Cita no encontrada"}), 404
+    return jsonify(quote), 200
+
+#-----Tags Endpoints-----#
+
+# Delete a tag by ID
+@swag_from({
+    'tags': ['Tags'],
+    'parameters': [
+        {
+            'name': 'tag_id',
+            'in': 'path',
+            'type': 'string',
+            'required': True,
+            'description': 'ID of the tag to delete'
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Tag deleted successfully',
+            'examples': {
+                'application/json': {'message': 'Tag deleted successfully'}
+            }
+        },
+        404: {
+            'description': 'Tag not found',
+            'examples': {
+                'application/json': {'error': 'Tag not found'}
+            }
+        }
+    }
+})
+@app.route("/tags/delete/<tag_id>", methods=["DELETE"])
+def delete_tag(tag_id):
+    if not tag_id_exists(db,tag_id):
+        return jsonify({"error": "Etiqueta no encontrada"}), 404
+    tag_delete(db, tag_id)
+    return jsonify({"message": "Etiqueta eliminada con éxito"}), 200
+
+# Get all tags
+@swag_from({
+    'tags': ['Tags'],
+    'parameters': [],
+    'responses': {
+        200: {
+            'description': 'List of tags',
+            'examples': {
+                'application/json': [
+                    {"id": "1", "name": "wisdom"},
+                    {"id": "2", "name": "inspiration"},
+                    {"id": "3", "name": "life"}
+                ]
+            }
+        }
+    }
+})
+@app.route("/tags", methods=["GET"])
+def get_tags():
+    all_tags = tags_get(db)
+    return jsonify(all_tags), 200
+
+#-----Characters Endpoint-----#
+
+# Get all characters
+@swag_from({
+    'tags': ['Characters'],
+    'parameters': [],
+    'responses': {
+        200: {
+            'description': 'List of characters',
+            'examples': {
+                'application/json': [
+                    {"id": "1", "name": "Albert Einstein"},
+                    {"id": "2", "name": "Isaac Newton"},
+                    {"id": "3", "name": "Marie Curie"}
+                ]
+            }
+        }
+    }
+})
+@app.route("/characters", methods=["GET"])
+def get_characters():
+    all_characters = characters_get(db)
+    return jsonify(all_characters), 200
+
+# Delete a character by ID
+@swag_from({
+    'tags': ['Characters'],
+    'parameters': [
+        {
+            'name': 'character_id',
+            'in': 'path',
+            'type': 'string',
+            'required': True,
+            'description': 'ID of the character to delete'
+        }
+    ],
+    'responses': {
+        200: {
+            'description': 'Character deleted successfully',
+            'examples': {
+                'application/json': {'message': 'Character deleted successfully'}
+            }
+        },
+        400: {
+            'description': 'Character has associated quotes',
+            'examples': {
+                'application/json': {'error': 'Cannot delete character with associated quotes'}
+            }
+        },
+        404: {
+            'description': 'Character not found',
+            'examples': {
+                'application/json': {'error': 'Character not found'}
+            }
+        }
+    }
+})
+@app.route("/characters/delete/<character_id>", methods=["DELETE"])
+def delete_character(character_id):
+    if not character_id_exists(db, character_id):
+        return jsonify({"error": "Personaje no encontrado"}), 404
+    if character_has_quotes(db, character_id):
+        return jsonify({"error": "No se puede eliminar un personaje con citas asociadas"}), 400
+    character_delete(db, character_id)
+    return jsonify({"message": "Personaje eliminado con éxito"}), 200
+
+if __name__ == "__main__":
+    app.run(debug=True)
